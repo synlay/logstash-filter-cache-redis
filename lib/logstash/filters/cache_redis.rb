@@ -2,6 +2,7 @@
 require "logstash/filters/base"
 require "logstash/namespace"
 require "redis"
+require "redlock"
 
 class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     config_name "cache_redis"
@@ -54,7 +55,11 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
     # # Sets the action. If set to true, it will get the data from redis cache
     # config :get, :validate => :boolean, :default => false
-    config :rpush_if_not_exists, :validate => :string
+    config :rpushnx, :validate => :string
+
+    # # Sets the action. If set to true, it will get the data from redis cache
+    # config :get, :validate => :boolean, :default => false
+    config :lock_timeout, :validate => :number, :default => 5000
 
     # # Sets the action. If set to true, it will get the data from redis cache
     # config :get, :validate => :boolean, :default => false
@@ -73,6 +78,7 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     public
     def register
         @redis = nil
+        @lock_manager = nil
         if @shuffle_hosts
             @host.shuffle!
         end
@@ -99,12 +105,18 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
                 @redis.rpush(event.get(@rpush), event.get(@source))
             end
 
-            if @rpush_if_not_exists
-                @redis.multi do |multi|
-                    key = event.get(@rpush_if_not_exists)
-                    unless multi.exists(key)
-                        multi.rpush(key, event.get(@source))
+            if @rpushnx
+                key = event.get(@rpushnx)
+                begin
+                    @lock_manager ||= connect_lockmanager
+                    @lock_manager.lock!("lock_#{key}", @lock_timeout) do
+                        @redis.rpush(key, event.get(@source)) unless @redis.exists(key)
                     end
+                rescue Redlock::LockError => e
+                    @logger.warn("Failed to lock section 'rpushnx' for key: #{key}",
+                                 :event => event, :exception => e)
+                    @lock_manager = nil
+                    retry
                 end
             end
 
@@ -118,10 +130,10 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
         rescue => e
             @logger.warn("Failed to send event to Redis", :event => event,
-                         :identity => identity, :exception => e,
-                         :backtrace => e.backtrace)
+                         :exception => e, :backtrace => e.backtrace)
             sleep @reconnect_interval
             @redis = nil
+            @lock_manager = nil
             retry
         end
 
@@ -152,6 +164,15 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
         end
 
         Redis.new(params)
+    end # def connect
+
+    def connect_lockmanager
+        hosts = Array(@host).map { |host|
+            host.prepend('redis://') unless host.start_with?('redis://')
+        }
+        @logger.debug("lock_manager hosts", hosts)
+
+        Redlock::Client.new(hosts)
     end # def connect
 
 end # class LogStash::Filters::Example
