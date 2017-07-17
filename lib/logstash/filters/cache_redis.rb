@@ -15,6 +15,8 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     #
     config :target, :validate => :string, :default => "message"
 
+    config :field, :validate => :string
+
     # The hostname(s) of your Redis server(s). Ports may be specified on any
     # hostname, which will override the global port config.
     # If the hosts list is an array, Logstash will pick one random host to connect to,
@@ -57,7 +59,12 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     # config :get, :validate => :boolean, :default => false
     config :rpushnx, :validate => :string
 
-    # # Sets the action. If set to true, it will get the data from redis cache
+    # Sets the action. If set to true, it will get the data from redis cache
+    config :hset, :validate => :string
+
+    # Sets the action. If set to true, it will get the data from redis cache
+    config :hget, :validate => :string
+
     # config :get, :validate => :boolean, :default => false
     config :lock_timeout, :validate => :number, :default => 5000
 
@@ -96,6 +103,14 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
         begin
             @redis ||= connect
+
+            if @hget
+                event.set(@target, @redis.hget(event.get(@hget), event.get(@source)))
+            end
+
+            if @hset
+                @redis.hset(event.get(@hset), event.get(@field), event.get(@source))
+            end
 
             if @llen
                 event.set(@target, @redis.llen(event.get(@llen)))
