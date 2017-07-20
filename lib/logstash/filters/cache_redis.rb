@@ -17,6 +17,9 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
     config :field, :validate => :string
 
+    # For now only working for rpushnx and llen!
+    config :cmd_key_is_formatted, :validate => :boolean, :default => false
+
     # The hostname(s) of your Redis server(s). Ports may be specified on any
     # hostname, which will override the global port config.
     # If the hosts list is an array, Logstash will pick one random host to connect to,
@@ -47,6 +50,14 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     # Interval for reconnecting to failed Redis connections
     config :reconnect_interval, :validate => :number, :default => 1
 
+    config :get, :validate => :string
+
+    config :set, :validate => :string
+
+    config :exists, :validate => :string
+
+    config :del, :validate => :string
+
     # # Sets the action. If set to true, it will get the data from redis cache
     # config :get, :validate => :boolean, :default => false
     config :llen, :validate => :string
@@ -64,6 +75,12 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
     # Sets the action. If set to true, it will get the data from redis cache
     config :hget, :validate => :string
+
+    config :sadd, :validate => :string
+
+    config :smembers, :validate => :string
+
+    config :scard, :validate => :string
 
     # config :get, :validate => :boolean, :default => false
     config :lock_timeout, :validate => :number, :default => 5000
@@ -104,6 +121,22 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
         begin
             @redis ||= connect
 
+            if @get
+                event.set(@target, @redis.get(event.get(@get)))
+            end
+
+            if @set
+                @redis.set(event.get(@set), event.get(@source))
+            end
+
+            if @exists
+                @redis.exists(event.get(@exists))
+            end
+
+            if @del
+                @redis.del(event.get(@del))
+            end
+
             if @hget
                 event.set(@target, @redis.hget(event.get(@hget), event.get(@source)))
             end
@@ -112,8 +145,21 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
                 @redis.hset(event.get(@hset), event.get(@field), event.get(@source))
             end
 
+            if @sadd
+                @redis.sadd(event.get(@sadd), event.get(@source))
+            end
+
+            if @smembers
+                @redis.smembers(event.get(@smembers))
+            end
+
+            if @scard
+                event.set(@target, @redis.scard(event.get(@scard)))
+            end
+
             if @llen
-                event.set(@target, @redis.llen(event.get(@llen)))
+                key = @cmd_key_is_formatted ? event.sprintf(@llen) : event.get(@llen)
+                event.set(@target, @redis.llen(key))
             end
 
             if @rpush
@@ -121,7 +167,7 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
             end
 
             if @rpushnx
-                key = event.get(@rpushnx)
+                key = @cmd_key_is_formatted ? event.sprintf(@rpushnx) : event.get(@rpushnx)
                 begin
                     @lock_manager ||= connect_lockmanager
                     @lock_manager.lock!("lock_#{key}", @lock_timeout) do
