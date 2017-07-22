@@ -50,6 +50,15 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     # Interval for reconnecting to failed Redis connections
     config :reconnect_interval, :validate => :number, :default => 1
 
+    # Maximal count of command retries after a crash because of a failure
+    config :max_retries, :validate => :number, :default => 3
+
+    # Interval for retrying to acquire a lock
+    config :lock_retry_interval, :validate => :number, :default => 1
+
+    # Maximal count of retries to acquire a lock
+    config :max_lock_retries, :validate => :number, :default => 3
+
     config :get, :validate => :string
 
     config :set, :validate => :string
@@ -117,7 +126,7 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
         #       all if clauses and replace it through one hashmap call, where
         #       the hashmap would be a mapping from 'cmd' -> <cmd_function_ref>
         #       E.q.: cmds.fetch(event.get(@llen), &method(:cmd_not_found_err))
-
+        max_retries = @max_retries
         begin
             @redis ||= connect
 
@@ -168,6 +177,7 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
             if @rpushnx
                 key = @cmd_key_is_formatted ? event.sprintf(@rpushnx) : event.get(@rpushnx)
+                max_lock_retries = @max_lock_retries
                 begin
                     @lock_manager ||= connect_lockmanager
                     @lock_manager.lock!("lock_#{key}", @lock_timeout) do
@@ -176,8 +186,14 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
                 rescue Redlock::LockError => e
                     @logger.warn("Failed to lock section 'rpushnx' for key: #{key}",
                                  :event => event, :exception => e)
-                    @lock_manager = nil
-                    retry
+                    sleep @lock_retry_interval
+                    max_lock_retries -= 1
+                    unless max_lock_retries < 0
+                        retry
+                    else
+                        @logger.error("Max retries reached for trying to lock section 'rpushnx' for key: #{key}",
+                                      :event => event, :exception => e)
+                    end
                 end
             end
 
@@ -190,12 +206,18 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
             end
 
         rescue => e
-            @logger.warn("Failed to send event to Redis", :event => event,
+            @logger.warn("Failed to send event to Redis, retrying after #{@reconnect_interval} seconds...", :event => event,
                          :exception => e, :backtrace => e.backtrace)
             sleep @reconnect_interval
             @redis = nil
             @lock_manager = nil
-            retry
+            max_retries -= 1
+            unless max_retries < 0
+                retry
+            else
+                @logger.error("Max retries reached for trying to execute a command",
+                              :event => event, :exception => e)
+            end
         end
 
         # filter_matched should go in the last line of our successful code
