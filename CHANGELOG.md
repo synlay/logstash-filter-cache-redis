@@ -1,3 +1,6 @@
+## 0.3.2
+ - Introduce redis command `sismember`
+
 ## 0.3.1
  - Prevent infinite loops for retries after errors or failed lock acquisitions
  - Introduce optional configuration options for controlling the count and

@@ -87,6 +87,8 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
     config :sadd, :validate => :string
 
+    config :sismember, :validate => :string
+
     config :smembers, :validate => :string
 
     config :scard, :validate => :string
@@ -156,6 +158,10 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
             if @sadd
                 @redis.sadd(event.get(@sadd), event.get(@source))
+            end
+
+            if @sismember
+                event.set(@target, @redis.sismember(event.get(@sismember), event.get(@source)))
             end
 
             if @smembers
